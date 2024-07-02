@@ -6,7 +6,7 @@ import jetbrains.buildServer.dotnet.coverage.serviceMessage.DotnetCoverageParame
 import jetbrains.buildServer.dotnet.coverage.utils.TempFactory
 import jetbrains.buildServer.util.FileUtil
 import jetbrains.buildServer.util.XmlUtil
-import org.jdom.Document
+import org.jdom2.Document
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException

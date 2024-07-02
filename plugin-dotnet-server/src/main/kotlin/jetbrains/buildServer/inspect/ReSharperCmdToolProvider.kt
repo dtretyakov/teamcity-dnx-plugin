@@ -11,7 +11,7 @@ import jetbrains.buildServer.inspect.CltConstants.JETBRAINS_RESHARPER_CLT_TOOL_T
 import jetbrains.buildServer.tools.*
 import jetbrains.buildServer.util.FileUtil
 import jetbrains.buildServer.web.openapi.PluginDescriptor
-import org.jdom.JDOMException
+import org.jdom2.JDOMException
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import java.io.File

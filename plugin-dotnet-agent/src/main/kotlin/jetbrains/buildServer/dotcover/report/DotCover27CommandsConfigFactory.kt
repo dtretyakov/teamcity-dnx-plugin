@@ -1,9 +1,9 @@
 package jetbrains.buildServer.dotcover.report
 
 import jetbrains.buildServer.dotnet.coverage.serviceMessage.DotnetCoverageParameters
-import org.jdom.Content
-import org.jdom.Document
-import org.jdom.Element
+import org.jdom2.Content
+import org.jdom2.Document
+import org.jdom2.Element
 import java.io.File
 
 open class DotCover27CommandsConfigFactory(

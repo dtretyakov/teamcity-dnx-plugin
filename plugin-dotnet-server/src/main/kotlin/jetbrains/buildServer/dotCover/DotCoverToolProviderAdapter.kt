@@ -15,7 +15,7 @@ import jetbrains.buildServer.find
 import jetbrains.buildServer.serverSide.TeamCityProperties
 import jetbrains.buildServer.tools.*
 import jetbrains.buildServer.web.openapi.PluginDescriptor
-import org.jdom.JDOMException
+import org.jdom2.JDOMException
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import java.io.File

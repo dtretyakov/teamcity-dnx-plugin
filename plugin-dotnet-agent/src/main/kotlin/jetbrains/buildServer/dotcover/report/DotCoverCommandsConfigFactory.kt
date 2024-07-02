@@ -1,6 +1,6 @@
 package jetbrains.buildServer.dotcover.report
 
-import org.jdom.Document
+import org.jdom2.Document
 import java.io.File
 
 interface DotCoverCommandsConfigFactory {

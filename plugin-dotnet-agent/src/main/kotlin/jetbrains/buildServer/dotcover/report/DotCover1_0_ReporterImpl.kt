@@ -4,9 +4,9 @@ import jetbrains.buildServer.dotnet.CoverageConstants.COVERAGE_REPORT_EXT
 import jetbrains.buildServer.dotnet.CoverageConstants.COVERAGE_REPORT_NAME
 import jetbrains.buildServer.dotnet.coverage.serviceMessage.DotnetCoverageParameters
 import jetbrains.buildServer.dotnet.coverage.utils.TempFactory
-import org.jdom.Content
-import org.jdom.Document
-import org.jdom.Element
+import org.jdom2.Content
+import org.jdom2.Document
+import org.jdom2.Element
 import java.io.File
 import java.io.IOException
 
