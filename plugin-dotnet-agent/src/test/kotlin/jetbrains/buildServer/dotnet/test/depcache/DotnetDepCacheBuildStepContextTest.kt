@@ -1,16 +1,19 @@
 package jetbrains.buildServer.dotnet.test.depcache
 
-import jetbrains.buildServer.depcache.DotnetDepCacheStepContext
+import io.mockk.mockk
+import jetbrains.buildServer.agent.runner.ParametersService
+import jetbrains.buildServer.depcache.DotnetDepCacheBuildStepContext
 import org.testng.Assert
 import org.testng.annotations.Test
 import java.nio.file.Paths
 
-class DotnetDepCacheStepContextTest {
+class DotnetDepCacheBuildStepContextTest {
 
     @Test
     fun `should increment execution number` () {
         // arrange
-        val context = DotnetDepCacheStepContext.newContext()
+        val parametersService = mockk<ParametersService>()
+        val context = DotnetDepCacheBuildStepContext.newContext(parametersService)
         var commandsCounter = 0
 
         // act

@@ -9,8 +9,15 @@ import jetbrains.buildServer.agent.cache.depcache.cacheroot.CacheRootUsage
 import jetbrains.buildServer.agent.runner.BuildInfo
 import jetbrains.buildServer.agent.runner.LoggerService
 import jetbrains.buildServer.depcache.*
-import jetbrains.buildServer.depcache.utils.DotnetDepCacheProjectPackagesJsonParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import org.testng.Assert
+import org.testng.annotations.AfterMethod
 import org.testng.annotations.BeforeMethod
 import org.testng.annotations.Test
 import java.io.File
@@ -28,39 +35,19 @@ class DotnetDepCacheManagerTest {
     private lateinit var _cache: DependencyCache
     @MockK
     private lateinit var _invalidator: DotnetDepCachePackagesChangedInvalidator
+    @MockK
+    private lateinit var _invalidationDataCollector: DotnetDepCacheInvalidationDataCollector
 
     private lateinit var tempFiles: TempFiles
+    private lateinit var workDir: File
     private lateinit var cachesDir: File
     private lateinit var stepId: String
-    private val projectPackages = """
-            {
-              "version": 1,
-              "parameters": "--include-transitive",
-              "projects": [
-                {
-                  "path": "/a85573f93844cb36/Project1/Prj1.csproj",
-                  "frameworks": [
-                    {
-                      "framework": "net8.0",
-                      "topLevelPackages": [
-                        {
-                          "id": "Serilog.Sinks.Console",
-                          "requestedVersion": "6.0.0",
-                          "resolvedVersion": "6.0.0"
-                        }
-                      ],
-                      "transitivePackages": [
-                        {
-                          "id": "Serilog",
-                          "resolvedVersion": "4.0.0"
-                        }
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
-        """.trimIndent()
+    private val invalidationData: Map<String, String> = mapOf(
+        "/Project1.csproj" to "932710cf8b4e31b5dd242a72540fe51c2fb9510fedbeaf7866780843d39af699",
+        "/Project2.csproj" to "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
+    )
+    private lateinit var coroutineScope: CoroutineScope
+    private val testDispatcher = StandardTestDispatcher()
 
     @BeforeMethod
     fun setUp() {
@@ -69,17 +56,27 @@ class DotnetDepCacheManagerTest {
         tempFiles = TempFiles()
         cachesDir = File(tempFiles.createTempDir(), "packages")
         stepId = "dotnet_${Random.nextInt()}"
+        workDir = tempFiles.createTempDir()
+        Dispatchers.setMain(testDispatcher)
+        coroutineScope = CoroutineScope(testDispatcher)
 
         every { _dotnetDepCacheSettingsProvider.cache } returns _cache
         every { _dotnetDepCacheSettingsProvider.postBuildInvalidator } returns _invalidator
         every { _buildInfo.id } returns stepId
+        every { _invalidationDataCollector.collect(workDir, _cache, any()) } returns Result.success(invalidationData)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @AfterMethod
+    fun tearDown() {
+        Dispatchers.resetMain()
     }
 
     @Test
     fun `should register and restore cache`() {
         // arrange
         val cacheRootUsage = cacheRootUsage()
-        val context = mockk<DotnetDepCacheStepContext>(relaxed = true)
+        val context = mockk<DotnetDepCacheBuildStepContext>(relaxed = true)
         val nugetPackagesGlobalDirObserver = mockk<CommandLineOutputAccumulationObserver>()
         every { nugetPackagesGlobalDirObserver.output } returns "global-packages: ${cachesDir.absolutePath}"
         every { context.newCacheRootUsage(any(), any()) } returns cacheRootUsage
@@ -91,14 +88,13 @@ class DotnetDepCacheManagerTest {
         // assert
         verify(exactly = 1) { context.newCacheRootUsage(cachesDir.toPath(), stepId) }
         verify(exactly = 1) { _cache.registerAndRestore(cacheRootUsage) }
-        verify(exactly = 1) { context.nugetPackagesLocation = cachesDir.toPath() }
     }
 
     @Test
     fun `should register and restore cache by exact location`() {
         // arrange
         val cacheRootUsage = cacheRootUsage()
-        val context = mockk<DotnetDepCacheStepContext>(relaxed = true)
+        val context = mockk<DotnetDepCacheBuildStepContext>(relaxed = true)
         every { context.newCacheRootUsage(any(), any()) } returns cacheRootUsage
         val manager = create()
 
@@ -108,13 +104,12 @@ class DotnetDepCacheManagerTest {
         // assert
         verify(exactly = 1) { context.newCacheRootUsage(cachesDir.toPath(), stepId) }
         verify(exactly = 1) { _cache.registerAndRestore(cacheRootUsage) }
-        verify(exactly = 1) { context.nugetPackagesLocation = cachesDir.toPath() }
     }
 
     @Test
     fun `should not register and restore cache when cache is disabled`() {
         // arrange
-        val context = mockk<DotnetDepCacheStepContext>()
+        val context = mockk<DotnetDepCacheBuildStepContext>()
         val nugetPackagesGlobalDirObserver = mockk<CommandLineOutputAccumulationObserver>()
         val manager = create()
         every { _dotnetDepCacheSettingsProvider.cache } returns null
@@ -126,51 +121,66 @@ class DotnetDepCacheManagerTest {
         // assert
         verify(exactly = 0) { context.newCacheRootUsage(any(), any()) }
         verify(exactly = 0) { _cache.registerAndRestore(any()) }
-        verify(exactly = 0) { context.nugetPackagesLocation = any() }
     }
 
     @Test
     fun `should update invalidation data`() {
         // arrange
-        val context = mockk<DotnetDepCacheStepContext>(relaxed = true)
-        val nugetPackagesGlobalDirObserver = mockk<CommandLineOutputAccumulationObserver>()
-        every { nugetPackagesGlobalDirObserver.output } returns projectPackages
-        every { context.nugetPackagesLocation } returns cachesDir.toPath()
-        val pathSlot = slot<Path>()
-        val packagesSlot = slot<DotnetDepCacheListPackagesResult>()
+        val context = mockk<DotnetDepCacheBuildStepContext>(relaxed = true)
+        val deferredData = mockk<Deferred<Map<String, String>>>()
+        coEvery { deferredData.await() } returns invalidationData
+        every { context.invalidationData } returns deferredData
+        every { context.invalidationDataAwaitTimeout } returns 10000
+        every { context.cachesLocations } returns mutableSetOf(cachesDir.toPath())
+        val cachesLocationsSlot = slot<Set<Path>>()
+        val invalidationDataSlot = slot<Map<String, String>>()
         val manager = create()
 
         // act
-        manager.updateInvalidationData(context, nugetPackagesGlobalDirObserver)
+        manager.updateInvalidationData(context)
 
         // assert
-        verify(exactly = 1) { _invalidator.addPackagesToCachesLocation(capture(pathSlot), capture(packagesSlot)) }
-        Assert.assertEquals(pathSlot.captured, cachesDir.toPath())
-        Assert.assertEquals(packagesSlot.captured, packages())
+        verify(exactly = 1) { _invalidator.addChecksumsToCachesLocations(capture(cachesLocationsSlot), capture(invalidationDataSlot)) }
+        Assert.assertEquals(cachesLocationsSlot.captured, mutableSetOf(cachesDir.toPath()))
+        Assert.assertEquals(invalidationDataSlot.captured, invalidationData)
     }
 
     @Test
     fun `should not update invalidation data when cache is disabled`() {
         // arrange
-        val context = mockk<DotnetDepCacheStepContext>()
-        val nugetPackagesGlobalDirObserver = mockk<CommandLineOutputAccumulationObserver>()
-        val manager = create()
+        val context = mockk<DotnetDepCacheBuildStepContext>(relaxed = true)
         every { _dotnetDepCacheSettingsProvider.cache } returns null
+        val manager = create()
 
         // act
-        manager.updateInvalidationData(context, nugetPackagesGlobalDirObserver)
+        manager.updateInvalidationData(context)
 
         // assert
-        verify(exactly = 0) { _invalidator.addPackagesToCachesLocation(any(), any()) }
+        verify(exactly = 0) { _invalidator.addChecksumsToCachesLocations(any(), any()) }
     }
 
-    private fun create() = DotnetDepCacheManager(_loggerService, _dotnetDepCacheSettingsProvider, _buildInfo)
+    @Test
+    fun `should prepare invalidation data`() {
+        // arrange
+        val context = mockk<DotnetDepCacheBuildStepContext>(relaxed = true)
+        coEvery { _invalidationDataCollector.collect(workDir, _cache, any()) } returns Result.success(invalidationData)
+        val manager = create()
+
+        // act
+        manager.prepareInvalidationDataAsync(workDir, context)
+
+        // assert
+        verify(exactly = 1) { context.invalidationData = any() }
+    }
+
+    private fun create() = DotnetDepCacheManager(
+        _loggerService, _dotnetDepCacheSettingsProvider,
+        _buildInfo, coroutineScope, _invalidationDataCollector
+    )
 
     private fun cacheRootUsage() = CacheRootUsage(
         DotnetDependencyCacheConstants.CACHE_ROOT_TYPE,
         cachesDir.toPath(),
         stepId
     )
-
-    private fun packages(): DotnetDepCacheListPackagesResult = DotnetDepCacheProjectPackagesJsonParser.fromCommandLineOutput(projectPackages).getOrThrow()
 }

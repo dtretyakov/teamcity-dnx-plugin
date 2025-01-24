@@ -8,7 +8,9 @@ import jetbrains.buildServer.agent.cache.depcache.invalidation.Deserializer
 import jetbrains.buildServer.agent.cache.depcache.invalidation.InvalidationMetadata
 import jetbrains.buildServer.agent.cache.depcache.invalidation.InvalidationResult
 import jetbrains.buildServer.agent.cache.depcache.invalidation.Serializable
-import jetbrains.buildServer.depcache.*
+import jetbrains.buildServer.depcache.DotnetDepCacheInvalidationData
+import jetbrains.buildServer.depcache.DotnetDepCachePackagesChangedInvalidator
+import jetbrains.buildServer.depcache.DotnetDependencyCacheConstants
 import org.testng.Assert
 import org.testng.annotations.BeforeMethod
 import org.testng.annotations.DataProvider
@@ -35,16 +37,14 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
             arrayOf(
                 """
                     {
-                      "cacheRootPackages": {
-                        "cache-root-1": [
-                          "Serilog.Sinks.Console:6.0.0",
-                          "FluentValidation:11.9.2",
-                          "Humanizer:2.14.1"
-                        ],
-                        "cache-root-2": [
-                          "MediatR:12.4.0",
-                          "MediatR.Contracts:2.0.1"
-                        ]
+                      "absoluteCachesPathToFilePathToChecksum": {
+                        "cache-root-1": {
+                          "/Project1.csproj": "932710cf8b4e31b5dd242a72540fe51c2fb9510fedbeaf7866780843d39af699",
+                          "/Prj2/Directory.Build.props": "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
+                        },
+                        "cache-root-2": {
+                          "/nuget.config": "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a"
+                        }
                       }
                     }
                 """.trimIndent(),
@@ -63,58 +63,12 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
                     )
                 ),
                 mapOf(
-                    Paths.get("/nuget/.packages1") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "Serilog.Sinks.Console", resolvedVersion = "6.0.0"),
-                                            Package(id = "FluentValidation", resolvedVersion = "11.9.2")
-                                        ),
-                                        transitivePackages = emptyList()
-                                    )
-                                )
-                            ),
-                            Project(
-                                path = "/Module2.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "Humanizer", resolvedVersion = "2.14.1")
-                                        ),
-                                        transitivePackages = emptyList()
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages1") to mapOf(
+                        "/Project1.csproj" to "932710cf8b4e31b5dd242a72540fe51c2fb9510fedbeaf7866780843d39af699",
+                        "/Prj2/Directory.Build.props" to "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
                     ),
-                    Paths.get("/nuget/.packages2") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "MediatR", resolvedVersion = "12.4.0")
-                                        ),
-                                        transitivePackages = listOf(
-                                            Package(id = "MediatR.Contracts", resolvedVersion = "2.0.1")
-                                        )
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages2") to mapOf(
+                        "/nuget.config" to "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a"
                     )
                 )
             )
@@ -122,21 +76,22 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
     }
 
     @Test(dataProvider = "getPackagesNotChangedTestData")
-    fun `should not invalidate cache when package sets not changed`(
+    fun `should not invalidate cache when invalidation data not changed`(
         cachedPackagesJson: String,
         newCacheRoots: List<CacheRoot>,
-        repoPathToPackages: Map<Path, DotnetDepCacheListPackagesResult>
+        repoPathToPackages: Map<Path, Map<String, String>>
     ) {
         // arrange
-        val parameterName = "nugetPackages"
-        val cachedPackages: DotnetDepCacheNugetPackages = prepareNugetPackagesMetadata(cachedPackagesJson)
+        val parameterName = "nugetInvalidationData"
+        val cachedPackages = prepareNugetPackagesMetadata(cachedPackagesJson)
         every { invalidationMetadataMock.getObjectParameter(any(), any<Deserializer<Serializable>>()) } returns cachedPackages
         val serializableArgumentSlot = slot<Serializable>()
 
         // act
         repoPathToPackages.forEach {
-            instance.addPackagesToCachesLocation(it.key, it.value)
+            instance.addChecksumsToCachesLocations(setOf(it.key), it.value)
         }
+
         val invalidationResult: InvalidationResult = instance.run(invalidationMetadataMock, emptyList<CacheRootDescriptor>(), newCacheRoots)
 
         // assert
@@ -144,27 +99,25 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
         Assert.assertNull(invalidationResult.invalidationReason)
         verify { invalidationMetadataMock.getObjectParameter(parameterName, any<Deserializer<Serializable>>()) }
         verify { invalidationMetadataMock.publishObjectParameter(parameterName, capture(serializableArgumentSlot)) }
-        val capturedPackagesToPublish: DotnetDepCacheNugetPackages = serializableArgumentSlot.captured as DotnetDepCacheNugetPackages
+        val capturedPackagesToPublish  = serializableArgumentSlot.captured as DotnetDepCacheInvalidationData
         Assert.assertEquals(capturedPackagesToPublish, cachedPackages) // we publish the same package sets
     }
 
     @DataProvider
     fun getPackagesChangedTestData(): Array<Array<Any>> {
         return arrayOf<Array<Any>>(
-            // set 1: a package version changed
+            // // set 1: checksum changed
             arrayOf(
                 """
                     {
-                      "cacheRootPackages": {
-                        "cache-root-1": [
-                          "Serilog.Sinks.Console:6.0.0", // <-- old version
-                          "FluentValidation:11.9.2",
-                          "Humanizer:2.14.1"
-                        ],
-                        "cache-root-2": [
-                          "MediatR:12.4.0",
-                          "MediatR.Contracts:2.0.1"
-                        ]
+                      "absoluteCachesPathToFilePathToChecksum": {
+                        "cache-root-1": {
+                          "/Project1.csproj": "932710cf8b4e31b5dd242a72540fe51c2fb9510fedbeaf7866780843d39af699",
+                          "/Prj2/Directory.Build.props": "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
+                        },
+                        "cache-root-2": {
+                          "/nuget.config": "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a"
+                        }
                       }
                     }
                 """.trimIndent(),
@@ -183,65 +136,28 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
                     )
                 ),
                 mapOf(
-                    Paths.get("/nuget/.packages1") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "Serilog.Sinks.Console", resolvedVersion = "6.1.0"), // <-- new version
-                                            Package(id = "FluentValidation", resolvedVersion = "11.9.2"),
-                                            Package(id = "Humanizer", resolvedVersion = "2.14.1")
-                                        ),
-                                        transitivePackages = emptyList()
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages1") to mapOf(
+                        "/Project1.csproj" to "a2c9f2dafa9e40885d7109e3e5547fa602306d71f870e0d3e6245b99cccb432f",  // <-- new checksum
+                        "/Prj2/Directory.Build.props" to "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
                     ),
-                    Paths.get("/nuget/.packages2") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "MediatR", resolvedVersion = "12.4.0")
-                                        ),
-                                        transitivePackages = listOf(
-                                            Package(id = "MediatR.Contracts", resolvedVersion = "2.0.1")
-                                        )
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages2") to mapOf(
+                        "/nuget.config" to "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a"
                     )
                 )
             ),
 
-//            // set 2: a new package added
+//            // set 2: a new file added
             arrayOf(
                 """
                     {
-                      "cacheRootPackages": {
-                        "cache-root-1": [
-                          "Serilog.Sinks.Console:6.0.0",
-                          "FluentValidation:11.9.2",
-                          "Humanizer:2.14.1"
-                        ],
-                        "cache-root-2": [
-                          "MediatR:12.4.0",
-                          "MediatR.Contracts:2.0.1"
-                        ]
+                      "absoluteCachesPathToFilePathToChecksum": {
+                        "cache-root-1": {
+                          "/Project1.csproj": "932710cf8b4e31b5dd242a72540fe51c2fb9510fedbeaf7866780843d39af699",
+                          "/Prj2/Directory.Build.props": "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
+                        },
+                        "cache-root-2": {
+                          "/nuget.config": "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a"
+                        }
                       }
                     }
                 """.trimIndent(),
@@ -260,66 +176,30 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
                     )
                 ),
                 mapOf(
-                    Paths.get("/nuget/.packages1") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "Serilog.Sinks.Console", resolvedVersion = "6.0.0"),
-                                            Package(id = "FluentValidation", resolvedVersion = "11.9.2"),
-                                            Package(id = "Humanizer", resolvedVersion = "2.14.1")
-                                        ),
-                                        transitivePackages = emptyList()
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages1") to mapOf(
+                        "/Project1.csproj" to "a2c9f2dafa9e40885d7109e3e5547fa602306d71f870e0d3e6245b99cccb432f",
+                        "/Prj2/Directory.Build.props" to "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
                     ),
-                    Paths.get("/nuget/.packages2") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "MediatR", resolvedVersion = "12.4.0")
-                                        ),
-                                        transitivePackages = listOf(
-                                            Package(id = "MediatR.Contracts", resolvedVersion = "2.0.1"),
-                                            Package(id = "MediatR.NewDep", resolvedVersion = "2.0.1") // <-- new package
-                                        )
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages2") to mapOf(
+                        "/nuget.config" to "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a",
+                        "/Directory.Build.targets" to "898c9a78530f745e304de1ae51809d5a5cf1771a976bbc4d5c217eb48dea1ba7" // <-- the new file
                     )
                 )
             ),
 
-//            // set 3: a package deleted
+//            // set 3: a file deleted
             arrayOf(
                 """
                     {
-                      "cacheRootPackages": {
-                        "cache-root-1": [
-                          "Serilog.Sinks.Console:6.0.0",
-                          "FluentValidation:11.9.2",
-                          "Humanizer:2.14.1" // <-- deleted package
-                        ],
-                        "cache-root-2": [
-                          "MediatR:12.4.0",
-                          "MediatR.Contracts:2.0.1"
-                        ]
+                      "absoluteCachesPathToFilePathToChecksum": {
+                        "cache-root-1": {
+                          "/Project1.csproj": "932710cf8b4e31b5dd242a72540fe51c2fb9510fedbeaf7866780843d39af699",
+                          "/Prj2/Directory.Build.props": "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
+                        },
+                        "cache-root-2": {
+                          "/nuget.config": "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a",
+                          "/Directory.Build.targets": "898c9a78530f745e304de1ae51809d5a5cf1771a976bbc4d5c217eb48dea1ba7"// <-- the deleted file
+                        }
                       }
                     }
                 """.trimIndent(),
@@ -338,123 +218,12 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
                     )
                 ),
                 mapOf(
-                    Paths.get("/nuget/.packages1") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "Serilog.Sinks.Console", resolvedVersion = "6.0.0"),
-                                            Package(id = "FluentValidation", resolvedVersion = "11.9.2")
-                                        ),
-                                        transitivePackages = emptyList()
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages1") to mapOf(
+                        "/Project1.csproj" to "a2c9f2dafa9e40885d7109e3e5547fa602306d71f870e0d3e6245b99cccb432f",
+                        "/Prj2/Directory.Build.props" to "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
                     ),
-                    Paths.get("/nuget/.packages2") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "MediatR", resolvedVersion = "12.4.0")
-                                        ),
-                                        transitivePackages = listOf(
-                                            Package(id = "MediatR.Contracts", resolvedVersion = "2.0.1")
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            ),
-
-//            // set 4: a package moved from one cache root to another
-            arrayOf(
-                """
-                    {
-                      "cacheRootPackages": {
-                        "cache-root-1": [
-                          "Serilog.Sinks.Console:6.0.0",
-                          "FluentValidation:11.9.2",
-                          "Humanizer:2.14.1" // <-- it was here
-                        ],
-                        "cache-root-2": [
-                          "MediatR:12.4.0",
-                          "MediatR.Contracts:2.0.1"
-                        ]
-                      }
-                    }
-                """.trimIndent(),
-                listOf(
-                    CacheRoot(
-                        "cache-root-1",
-                        DotnetDependencyCacheConstants.CACHE_ROOT_TYPE,
-                        Paths.get("/nuget/.packages1"),
-                        emptySet<String>()
-                    ),
-                    CacheRoot(
-                        "cache-root-2",
-                        DotnetDependencyCacheConstants.CACHE_ROOT_TYPE,
-                        Paths.get("/nuget/.packages2"),
-                        emptySet<String>()
-                    )
-                ),
-                mapOf(
-                    Paths.get("/nuget/.packages1") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "Serilog.Sinks.Console", resolvedVersion = "6.0.0"),
-                                            Package(id = "FluentValidation", resolvedVersion = "11.9.2")
-                                        ),
-                                        transitivePackages = emptyList()
-                                    )
-                                )
-                            )
-                        )
-                    ),
-                    Paths.get("/nuget/.packages2") to DotnetDepCacheListPackagesResult(
-                        version = 1,
-                        parameters = "--include-transitive",
-                        problems = emptyList(),
-                        projects = listOf(
-                            Project(
-                                path = "/Module1.csproj",
-                                frameworks = listOf(
-                                    Framework(
-                                        framework = "net8.0",
-                                        topLevelPackages = listOf(
-                                            Package(id = "MediatR", resolvedVersion = "12.4.0"),
-                                            Package(id = "Humanizer", resolvedVersion = "2.14.1") // <-- now it's here
-                                        ),
-                                        transitivePackages = listOf(
-                                            Package(id = "MediatR.Contracts", resolvedVersion = "2.0.1")
-                                        )
-                                    )
-                                )
-                            )
-                        )
+                    Paths.get("/nuget/.packages2") to mapOf(
+                        "/nuget.config" to "994e24667e8b8412cb2b4ca645bd69c54ee2490dde5d727f2c835d809a7c386a"
                     )
                 )
             ),
@@ -465,17 +234,17 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
     fun `should invalidate cache when package sets changed`(
         cachedPackagesJson: String,
         newCacheRoots: List<CacheRoot>,
-        repoPathToPakages: Map<Path, DotnetDepCacheListPackagesResult>
+        repoPathToPackages: Map<Path, Map<String, String>>
     ) {
         // arrange
-        val parameterName = "nugetPackages"
-        var cachedPackages: DotnetDepCacheNugetPackages = prepareNugetPackagesMetadata(cachedPackagesJson)
+        val parameterName = "nugetInvalidationData"
+        var cachedPackages = prepareNugetPackagesMetadata(cachedPackagesJson)
         every { invalidationMetadataMock.getObjectParameter(any(), any<Deserializer<Serializable>>()) } returns cachedPackages
         val serializableArgumentSlot = slot<Serializable>()
 
         // act
-        repoPathToPakages.forEach {
-            instance.addPackagesToCachesLocation(it.key, it.value)
+        repoPathToPackages.forEach {
+            instance.addChecksumsToCachesLocations(setOf(it.key), it.value)
         }
         var invalidationResult: InvalidationResult = instance.run(invalidationMetadataMock, emptyList<CacheRootDescriptor>(), newCacheRoots)
 
@@ -484,12 +253,11 @@ class DotnetDepCachePackagesChangedInvalidatorTest {
         Assert.assertNotNull(invalidationResult.invalidationReason)
         verify { invalidationMetadataMock.getObjectParameter(parameterName, any<Deserializer<Serializable>>()) }
         verify { invalidationMetadataMock.publishObjectParameter(parameterName, capture(serializableArgumentSlot)) }
-        var capturedPackagesToPublish: DotnetDepCacheNugetPackages? = serializableArgumentSlot.captured as DotnetDepCacheNugetPackages?
+        var capturedPackagesToPublish = serializableArgumentSlot.captured as DotnetDepCacheInvalidationData?
         Assert.assertNotEquals(capturedPackagesToPublish, cachedPackages) // we publish changed package sets
     }
 
-
-    private fun prepareNugetPackagesMetadata(json: String): DotnetDepCacheNugetPackages {
-        return DotnetDepCacheNugetPackages.deserialize(json.toByteArray(StandardCharsets.UTF_8))
+    private fun prepareNugetPackagesMetadata(json: String): DotnetDepCacheInvalidationData {
+        return DotnetDepCacheInvalidationData.deserialize(json.toByteArray(StandardCharsets.UTF_8))
     }
 }

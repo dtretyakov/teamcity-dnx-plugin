@@ -9,55 +9,46 @@ import java.nio.file.Path
 
 class DotnetDepCachePackagesChangedInvalidator : DependencyCacheInvalidator {
 
-    private val absolutePackagesPathToProjectPathToPackages: MutableMap<String, MutableMap<String, MutableList<Framework>>> = HashMap()
+    private val absoluteCachesPathToFilePathToChecksum: MutableMap<String, Map<String, String>> = HashMap()
 
     override fun run(
         invalidationMetadata: InvalidationMetadata,
         cacheRoots: List<CacheRootDescriptor>,
         newCacheRoots: List<CacheRoot>
     ): InvalidationResult {
+        if (absoluteCachesPathToFilePathToChecksum.isEmpty()) {
+            return InvalidationResult.invalidated("Checksum for dependencies wasn't computed")
+        }
+
         val absoluteCachesPathToNewCacheRootId: Map<String, String> = newCacheRoots.associate {
             it.location.toAbsolutePath().toString() to it.id
         }
 
-        val newCacheRootIdToPackagesSet: Map<String, Set<String>> = absolutePackagesPathToProjectPathToPackages.entries.mapNotNull { entry ->
+        val newCacheRootIdToFilesChecksum: Map<String, Map<String, String>> = absoluteCachesPathToFilePathToChecksum.entries.mapNotNull { entry ->
             absoluteCachesPathToNewCacheRootId[entry.key]?.let { cacheRootId ->
-                cacheRootId to extractPackages(entry.value)
+                cacheRootId to entry.value
             }
         }.toMap()
 
-        val newPackages = DotnetDepCacheNugetPackages(newCacheRootIdToPackagesSet)
-        val cachedPackages = invalidationMetadata.getObjectParameter("nugetPackages") {
-            DotnetDepCacheNugetPackages.deserialize(it)
+        val newData = DotnetDepCacheInvalidationData(newCacheRootIdToFilesChecksum)
+        val cachedData = invalidationMetadata.getObjectParameter("nugetInvalidationData") {
+            DotnetDepCacheInvalidationData.deserialize(it)
         }
 
-        invalidationMetadata.publishObjectParameter<DotnetDepCacheNugetPackages>("nugetPackages", newPackages)
+        invalidationMetadata.publishObjectParameter<DotnetDepCacheInvalidationData>("nugetInvalidationData", newData)
 
-        return if (newPackages == cachedPackages) InvalidationResult.validated()
+        return if (newData == cachedData) InvalidationResult.validated()
         else InvalidationResult.invalidated("Nuget packages have changed")
-    }
-
-    private fun extractPackages(projectPathToPackages: MutableMap<String, MutableList<Framework>>): Set<String> {
-        return projectPathToPackages.values
-            .flatMap { it }
-            .flatMap { framework ->
-                (framework.topLevelPackages ?: emptyList()) + (framework.transitivePackages ?: emptyList())
-            }
-            .mapNotNull { it.packageCompositeName }
-            .toSet()
     }
 
     override fun shouldRunIfCacheInvalidated(): Boolean = true
 
-    fun addPackagesToCachesLocation(nugetPackagesPath: Path, nugetPackages: DotnetDepCacheListPackagesResult) {
-        nugetPackages.projects?.forEach { project ->
-            if (project.path != null && !project.frameworks.isNullOrEmpty()) {
-                absolutePackagesPathToProjectPathToPackages.getOrPut(nugetPackagesPath.toAbsolutePath().toString()) {
-                    HashMap()
-                }.getOrPut(project.path) {
-                    ArrayList()
-                }.addAll(project.frameworks.toSet())
-            }
+    fun addChecksumsToCachesLocations(cachesLocations: Set<Path>, checksums: Map<String, String>) {
+        cachesLocations.forEach { path ->
+            val key = path.toAbsolutePath().toString()
+            val existingChecksums = absoluteCachesPathToFilePathToChecksum[key]?.toMutableMap() ?: mutableMapOf()
+            existingChecksums.putAll(checksums)
+            absoluteCachesPathToFilePathToChecksum[key] = existingChecksums
         }
     }
 }

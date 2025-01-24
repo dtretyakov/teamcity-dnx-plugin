@@ -5,13 +5,15 @@ import jetbrains.buildServer.agent.cache.depcache.DependencyCache
 import jetbrains.buildServer.agent.runner.BuildInfo
 import jetbrains.buildServer.agent.runner.LoggerService
 import jetbrains.buildServer.depcache.utils.DotnetDepCacheGlobalPackagesLocationParser
-import jetbrains.buildServer.depcache.utils.DotnetDepCacheProjectPackagesJsonParser
+import kotlinx.coroutines.*
 import java.io.File
 
 class DotnetDepCacheManager(
     private val _loggerService: LoggerService,
     private val _dotnetDepCacheSettingsProvider: DotnetDepCacheSettingsProvider,
-    private val _buildInfo: BuildInfo
+    private val _buildInfo: BuildInfo,
+    private val _coroutineScope: CoroutineScope,
+    private val _invalidationDataCollector: DotnetDepCacheInvalidationDataCollector
 ) {
 
     val cache: DependencyCache?
@@ -20,8 +22,32 @@ class DotnetDepCacheManager(
     val cacheEnabled: Boolean
         get() = cache != null // not null when cache is enabled and configured for dotnet runner
 
+    fun prepareInvalidationDataAsync(workingDirectory: File, depCacheStepContext: DotnetDepCacheBuildStepContext) {
+        val cache = cache
+        val invalidator = _dotnetDepCacheSettingsProvider.postBuildInvalidator
+        if (cache == null || invalidator == null) {
+            // this is not an expected case, something is wrong
+            _loggerService.writeWarning(".NET dependency cache is enabled but failed to initialize, couldn't prepare invalidation data")
+            return
+        }
+
+        val deferred: Deferred<Map<String, String>> = _coroutineScope.async {
+            withContext(Dispatchers.IO) {
+                _invalidationDataCollector.collect(workingDirectory, cache, depCacheStepContext.depthLimit).fold(
+                    onSuccess = { it },
+                    onFailure = { exception ->
+                        cache.logWarning("Error while preparing invalidation data, this execution will not be cached: ${exception.message}")
+                        return@fold emptyMap()
+                    }
+                )
+            }
+        }
+
+        depCacheStepContext.invalidationData = deferred
+    }
+
     fun registerAndRestoreCache(
-        depCacheContext: DotnetDepCacheStepContext,
+        depCacheContext: DotnetDepCacheBuildStepContext,
         nugetPackagesGlobalDirObserver: CommandLineOutputAccumulationObserver
     ) {
         val packagesRawOutput = nugetPackagesGlobalDirObserver.output
@@ -42,11 +68,12 @@ class DotnetDepCacheManager(
     }
 
     fun registerAndRestoreCache(
-        depCacheContext: DotnetDepCacheStepContext,
+        depCacheContext: DotnetDepCacheBuildStepContext,
         nugetPackagesLocation: File
     ) {
         val cache = cache
-        if (cache == null) {
+        val invalidator = _dotnetDepCacheSettingsProvider.postBuildInvalidator
+        if (cache == null || invalidator == null) {
             // this is not an expected case, something is wrong
             _loggerService.writeWarning(".NET dependency cache is enabled but failed to initialize, it will not be used at the current execution")
             return
@@ -57,20 +84,20 @@ class DotnetDepCacheManager(
             nugetPackagesLocation.mkdirs()
         }
         val nugetPackagesPath = nugetPackagesLocation.toPath()
+        val nupkgEmptyFile = File(nugetPackagesLocation, "teamcity-nuget-cache-empty-file.nupkg")
+        if (!nupkgEmptyFile.exists()) {
+            nupkgEmptyFile.createNewFile()
+        }
 
         _loggerService.writeDebug("Creating a new cache root usage for nuget packages location: $nugetPackagesPath")
         val cacheRootUsage = depCacheContext.newCacheRootUsage(nugetPackagesPath, _buildInfo.id)
         cache.registerAndRestore(cacheRootUsage)
 
-        depCacheContext.nugetPackagesLocation = nugetPackagesPath
+        depCacheContext.cachesLocations.add(nugetPackagesPath)
     }
 
-    /**
-     * Must be invoked after [registerAndRestoreCache]
-     */
     fun updateInvalidationData(
-        depCacheContext: DotnetDepCacheStepContext,
-        nugetPackagesGlobalDirObserver: CommandLineOutputAccumulationObserver
+        depCacheStepContext: DotnetDepCacheBuildStepContext
     ) {
         val cache = cache
         val invalidator = _dotnetDepCacheSettingsProvider.postBuildInvalidator
@@ -80,33 +107,32 @@ class DotnetDepCacheManager(
             return
         }
 
-        val projectPackagesRawOutput = nugetPackagesGlobalDirObserver.output
-        if (projectPackagesRawOutput.isNullOrEmpty()) {
-            cache.logWarning("Failed to collect .NET project's packages, this execution will not be cached")
+        if (depCacheStepContext.invalidationData == null) {
+            cache.logWarning("invalidation data hasn't been prepared, this execution will not be cached")
             return
         }
 
-        val projectPackages = DotnetDepCacheProjectPackagesJsonParser.fromCommandLineOutput(projectPackagesRawOutput).fold(
-            onSuccess = { it },
-            onFailure = { e ->
-                cache.logWarning("Failed to parse .NET project's packages, this execution will not be cached: ${e.message}")
-                return
+        if (depCacheStepContext.cachesLocations.isEmpty()) {
+            cache.logWarning("NuGet caches locations wasn't detected, this execution will not be cached")
+            return
+        }
+
+        val invalidationData: Map<String, String> = runCatching {
+            runBlocking {
+                withTimeout(depCacheStepContext.invalidationDataAwaitTimeout) {
+                    depCacheStepContext.invalidationData!!.await()
+                }
             }
-        )
-        if (!projectPackages.problems.isNullOrEmpty()) {
-            val problems = projectPackages.problems.joinToString("\n") { it.text.orEmpty() }
-            cache.logWarning("""
-                Problems encountered while collecting .NET project's packages:
-                $problems
-                This execution will not be cached.
-            """.trimIndent())
-            return
+        }.getOrElse { e ->
+            cache.logWarning("an error occurred during getting the invalidation data: ${e.message}")
+            emptyMap()
         }
-        if (depCacheContext.nugetPackagesLocation == null) {
-            cache.logWarning("NuGet packages location hasn't been initialized, this execution will not be cached")
+
+        if (invalidationData.isEmpty()) {
+            cache.logWarning("invalidation data wasn't collected, this execution will not be cached")
             return
         }
 
-        invalidator.addPackagesToCachesLocation(depCacheContext.nugetPackagesLocation!!, projectPackages)
+        invalidator.addChecksumsToCachesLocations(depCacheStepContext.cachesLocations, invalidationData)
     }
 }

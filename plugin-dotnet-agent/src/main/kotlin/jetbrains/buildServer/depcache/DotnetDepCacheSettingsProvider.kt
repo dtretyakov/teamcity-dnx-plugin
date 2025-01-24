@@ -6,7 +6,12 @@ import jetbrains.buildServer.agent.BuildFinishedStatus
 import jetbrains.buildServer.agent.cache.depcache.DependencyCacheProvider
 import jetbrains.buildServer.agent.cache.depcache.DependencyCacheSettingsProviderRegistry
 import jetbrains.buildServer.agent.cache.depcache.buildFeature.BuildRunnerDependencyCacheSettingsProvider
+import jetbrains.buildServer.agent.cache.depcache.cacheroot.CacheRootPublishPaths
+import jetbrains.buildServer.agent.cache.depcache.cacheroot.CacheRootPublisher
+import jetbrains.buildServer.depcache.DotnetDependencyCacheConstants.CACHE_ORIGINAL_ARCHIVE
+import jetbrains.buildServer.depcache.DotnetDependencyCacheConstants.CACHE_ORIGINAL_ARCHIVE_DEFAULT
 import jetbrains.buildServer.dotnet.DotnetConstants
+import jetbrains.buildServer.serverSide.TeamCityProperties
 import jetbrains.buildServer.util.EventDispatcher
 
 class DotnetDepCacheSettingsProvider(
@@ -27,6 +32,22 @@ class DotnetDepCacheSettingsProvider(
     protected override fun createPostBuildInvalidators(): List<DotnetDepCachePackagesChangedInvalidator> {
         postBuildInvalidator = DotnetDepCachePackagesChangedInvalidator()
         return listOf(postBuildInvalidator!!)
+    }
+
+    protected override fun createCacheRootPublisher(): CacheRootPublisher {
+        val cacheOriginalArchive = TeamCityProperties.getBoolean(CACHE_ORIGINAL_ARCHIVE, CACHE_ORIGINAL_ARCHIVE_DEFAULT)
+
+        if (cacheOriginalArchive) {
+            return CacheRootPublisher({
+                CacheRootPublishPaths.includeAll()
+            })
+        }
+
+        return CacheRootPublisher({
+            CacheRootPublishPaths.exclude(
+                listOf("**/*.nupkg")
+            )
+        })
     }
 
     public override fun buildFinished(build: AgentRunningBuild, buildStatus: BuildFinishedStatus) {

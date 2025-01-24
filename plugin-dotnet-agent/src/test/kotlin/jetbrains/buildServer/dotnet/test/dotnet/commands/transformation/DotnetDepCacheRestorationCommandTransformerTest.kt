@@ -1,31 +1,21 @@
 package jetbrains.buildServer.dotnet.test.dotnet.commands.transformation
 
-import io.mockk.MockKAnnotations
-import io.mockk.clearAllMocks
-import io.mockk.every
-import io.mockk.just
-import io.mockk.mockk
-import io.mockk.Runs
-import io.mockk.verify
+import io.mockk.*
 import io.mockk.impl.annotations.MockK
 import jetbrains.buildServer.TempFiles
 import jetbrains.buildServer.agent.*
 import jetbrains.buildServer.agent.cache.depcache.DependencyCache
 import jetbrains.buildServer.agent.runner.BuildStepContext
+import jetbrains.buildServer.agent.runner.ParametersService
+import jetbrains.buildServer.depcache.DotnetDepCacheBuildStepContext
+import jetbrains.buildServer.depcache.DotnetDepCacheBuildStepContextHolder
 import jetbrains.buildServer.depcache.DotnetDepCacheManager
-import jetbrains.buildServer.dotnet.ArgumentsProvider
-import jetbrains.buildServer.dotnet.DotnetCommand
-import jetbrains.buildServer.dotnet.DotnetCommandContext
-import jetbrains.buildServer.dotnet.DotnetCommandType
-import jetbrains.buildServer.dotnet.DotnetRunnerCacheDirectoryProvider
-import jetbrains.buildServer.dotnet.RestorePackagesPathArgumentsProvider
-import jetbrains.buildServer.dotnet.RestorePackagesPathManager
-import jetbrains.buildServer.dotnet.commands.ListPackageCommand
+import jetbrains.buildServer.dotnet.*
 import jetbrains.buildServer.dotnet.commands.NugetLocalsCommand
 import jetbrains.buildServer.dotnet.commands.targeting.TargetArguments
+import jetbrains.buildServer.dotnet.commands.transformation.DotnetCommandsTransformationStage
 import jetbrains.buildServer.dotnet.commands.transformation.DotnetDepCacheRestorationCommandTransformer
 import jetbrains.buildServer.dotnet.commands.transformation.DotnetDepCacheRestorationCommandTransformer.Companion.MinDotNetSdkVersionForDepCache
-import jetbrains.buildServer.dotnet.commands.transformation.DotnetCommandsTransformationStage
 import org.testng.Assert
 import org.testng.annotations.BeforeMethod
 import org.testng.annotations.DataProvider
@@ -36,8 +26,6 @@ class DotnetDepCacheRestorationCommandTransformerTest {
     @MockK
     private lateinit var _nugetLocalsCommand: NugetLocalsCommand
     @MockK
-    private lateinit var _listPackageCommand: ListPackageCommand
-    @MockK
     private lateinit var _dotnetDepCacheManager: DotnetDepCacheManager
     @MockK
     private lateinit var _buildStepContext: BuildStepContext
@@ -45,6 +33,8 @@ class DotnetDepCacheRestorationCommandTransformerTest {
     private lateinit var _restorePackagesPathManager: RestorePackagesPathManager
     @MockK
     private lateinit var _virtualContext: VirtualContext
+    @MockK
+    private lateinit var _buildStepContextHolder: DotnetDepCacheBuildStepContextHolder
     @MockK(relaxed = true)
     private lateinit var _dependencyCache: DependencyCache
     private lateinit var _restorePackagesPathArgumentsProvider: ArgumentsProvider
@@ -59,7 +49,6 @@ class DotnetDepCacheRestorationCommandTransformerTest {
         tempFiles = TempFiles()
         cachesDir = File(tempFiles.createTempDir(), DotnetRunnerCacheDirectoryProvider.DOTNET_CACHE_DIR)
         every { _nugetLocalsCommand.commandType } returns DotnetCommandType.NuGetLocals
-        every { _listPackageCommand.commandType } returns DotnetCommandType.ListPackage
         val runnerContext = mockk<BuildRunnerContext>()
         every { _buildStepContext.runnerContext } returns runnerContext
         val build = mockk<AgentRunningBuild>()
@@ -71,6 +60,7 @@ class DotnetDepCacheRestorationCommandTransformerTest {
         every { _dotnetDepCacheManager.cache } returns _dependencyCache
         every { _dotnetDepCacheManager.cacheEnabled } returns true
         every { _restorePackagesPathManager.shouldOverrideRestorePackagesPath() } returns false
+        every { _buildStepContextHolder.context } returns DotnetDepCacheBuildStepContext.newContext(mockk<ParametersService>())
     }
 
     @Test
@@ -102,14 +92,12 @@ class DotnetDepCacheRestorationCommandTransformerTest {
         // act
         val result = transformer.apply(context, sequenceOf(command1, command2)).toList()
 
-        // assert: there are 2 initial commands + 2 auxiliary ones per initial
-        Assert.assertEquals(result.size, 6)
+        // assert: there are 2 initial commands + auxiliary one per initial
+        Assert.assertEquals(result.size, 4)
         Assert.assertEquals(result.get(0).commandType, DotnetCommandType.NuGetLocals) // NuGetLocals auxiliary command for the initial command 1
         Assert.assertEquals(result.get(1).commandType, command1.commandType) // initial command 1
-        Assert.assertEquals(result.get(2).commandType, DotnetCommandType.ListPackage) // ListPackage auxiliary command for the initial command 1
-        Assert.assertEquals(result.get(3).commandType, DotnetCommandType.NuGetLocals) // NuGetLocals auxiliary command for the initial command 2
-        Assert.assertEquals(result.get(4).commandType, command2.commandType) // initial command 2
-        Assert.assertEquals(result.get(5).commandType, DotnetCommandType.ListPackage) // ListPackage auxiliary command for the initial command 2
+        Assert.assertEquals(result.get(2).commandType, DotnetCommandType.NuGetLocals) // NuGetLocals auxiliary command for the initial command 2
+        Assert.assertEquals(result.get(3).commandType, command2.commandType) // initial command 2
     }
 
     @DataProvider(name = "incompatibleDotnetCommandTypes")
@@ -233,13 +221,11 @@ class DotnetDepCacheRestorationCommandTransformerTest {
         val result = transformer.apply(context, sequenceOf(command1, command2)).toList()
 
         // assert
-        // there are 2 initial commands + 1 ListPackage auxiliary command per initial
+        // there are 2 initial commands
         // NuGetLocals wasn't executed, since the cache root location is known
-        Assert.assertEquals(result.size, 4)
+        Assert.assertEquals(result.size, 2)
         Assert.assertEquals(result.get(0).commandType, command1.commandType) // initial command 1
-        Assert.assertEquals(result.get(1).commandType, DotnetCommandType.ListPackage) // ListPackage auxiliary command for the initial command 1
-        Assert.assertEquals(result.get(2).commandType, command2.commandType) // initial command 2
-        Assert.assertEquals(result.get(3).commandType, DotnetCommandType.ListPackage) // ListPackage auxiliary command for the initial command 2
+        Assert.assertEquals(result.get(1).commandType, command2.commandType) // initial command 2
 
         // there were 2 invocations of the registerAndRestoreCache per each initial command
         verify(exactly = 2) { _dotnetDepCacheManager.registerAndRestoreCache(any(), cachesDir) }
@@ -251,7 +237,7 @@ class DotnetDepCacheRestorationCommandTransformerTest {
         Assert.assertEquals(command1ArgsResult.get(0).value, expectedRestorePackagesPath)
 
         // RestorePackagesPath was overridden for the command1
-        val command2ArgsResult = result.get(2).getArguments(context).toList()
+        val command2ArgsResult = result.get(1).getArguments(context).toList()
         Assert.assertEquals(command2ArgsResult.size, 3) // // initially, 2
         Assert.assertEquals(command2ArgsResult.get(2).value, expectedRestorePackagesPath)
     }
@@ -284,27 +270,26 @@ class DotnetDepCacheRestorationCommandTransformerTest {
         val result = transformer.apply(context, sequenceOf(command1, command2)).toList()
 
         // assert
-        // there are 2 initial commands + 2 auxiliary ones per initial
+        // there are 2 initial commands + auxiliary one per initial
         // NuGetLocals was executed since the cache root location is unknown
-        Assert.assertEquals(result.size, 6)
+        Assert.assertEquals(result.size, 4)
         Assert.assertEquals(result.get(0).commandType, DotnetCommandType.NuGetLocals) // NuGetLocals auxiliary command for the initial command 1
         Assert.assertEquals(result.get(1).commandType, command1.commandType) // initial command 1
-        Assert.assertEquals(result.get(2).commandType, DotnetCommandType.ListPackage) // ListPackage auxiliary command for the initial command 1
-        Assert.assertEquals(result.get(3).commandType, DotnetCommandType.NuGetLocals) // NuGetLocals auxiliary command for the initial command 2
-        Assert.assertEquals(result.get(4).commandType, command2.commandType) // initial command 2
-        Assert.assertEquals(result.get(5).commandType, DotnetCommandType.ListPackage) // ListPackage auxiliary command for the initial command 2
+        Assert.assertEquals(result.get(2).commandType, DotnetCommandType.NuGetLocals) // NuGetLocals auxiliary command for the initial command 2
+        Assert.assertEquals(result.get(3).commandType, command2.commandType) // initial command 2
 
         // RestorePackagesPath wasn't overridden for the initial commands
         val command1ArgsResult = result.get(1).getArguments(context).toList()
         Assert.assertEquals(command1ArgsResult.size, 0) // initially, 0
         Assert.assertEquals(command1ArgsResult, command1.getArguments(context).toList())
 
-        val command2ArgsResult = result.get(4).getArguments(context).toList()
+        val command2ArgsResult = result.get(3).getArguments(context).toList()
         Assert.assertEquals(command2ArgsResult.size, 2) // // initially, 2
         Assert.assertEquals(command2ArgsResult, command2Args)
     }
 
     private fun create() = DotnetDepCacheRestorationCommandTransformer(
-        _nugetLocalsCommand, _listPackageCommand,_dotnetDepCacheManager, _restorePackagesPathArgumentsProvider, _restorePackagesPathManager, _buildStepContext, _virtualContext
+        _nugetLocalsCommand, _dotnetDepCacheManager, _restorePackagesPathArgumentsProvider,
+        _restorePackagesPathManager, _buildStepContext, _virtualContext, _buildStepContextHolder
     )
 }

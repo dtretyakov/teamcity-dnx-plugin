@@ -1,15 +1,11 @@
 package jetbrains.buildServer.dotnet.commands.transformation
 
-import jetbrains.buildServer.agent.CommandLineArgument
-import jetbrains.buildServer.agent.CommandLineOutputAccumulationObserver
-import jetbrains.buildServer.agent.CommandResultEvent
-import jetbrains.buildServer.agent.Version
-import jetbrains.buildServer.agent.VirtualContext
+import jetbrains.buildServer.agent.*
 import jetbrains.buildServer.agent.runner.BuildStepContext
-import jetbrains.buildServer.depcache.DotnetDepCacheStepContext
+import jetbrains.buildServer.depcache.DotnetDepCacheBuildStepContext
+import jetbrains.buildServer.depcache.DotnetDepCacheBuildStepContextHolder
 import jetbrains.buildServer.depcache.DotnetDepCacheManager
 import jetbrains.buildServer.dotnet.*
-import jetbrains.buildServer.dotnet.commands.ListPackageCommand
 import jetbrains.buildServer.dotnet.commands.NugetLocalsCommand
 import jetbrains.buildServer.dotnet.commands.targeting.TargetArguments
 import jetbrains.buildServer.rx.Observer
@@ -17,19 +13,18 @@ import jetbrains.buildServer.rx.disposableOf
 
 class DotnetDepCacheRestorationCommandTransformer(
     private val _nugetLocalsCommand: NugetLocalsCommand,
-    private val _listPackageCommand: ListPackageCommand,
     private val _dotnetDepCacheManager: DotnetDepCacheManager,
     private val _restorePackagesPathArgumentsProvider: ArgumentsProvider,
     private val _restorePackagesPathManager: RestorePackagesPathManager,
     private val _buildStepContext: BuildStepContext,
-    private val _virtualContext: VirtualContext
+    private val _virtualContext: VirtualContext,
+    private val _buildStepContextHolder: DotnetDepCacheBuildStepContextHolder
 ) : DotnetCommandsTransformer {
 
     override val stage = DotnetCommandsTransformationStage.DepCacheRestoration
 
     override fun apply(context: DotnetCommandContext, commands: DotnetCommandsStream): DotnetCommandsStream {
         return sequence {
-            var depCacheContext = DotnetDepCacheStepContext.newContext()
             for (initialCommand in commands) {
                 val shouldTransform = _dotnetDepCacheManager.cacheEnabled &&
                         versionCompatible(context.toolVersion) &&
@@ -37,16 +32,10 @@ class DotnetDepCacheRestorationCommandTransformer(
                         targetArgumentsDepCacheCompatible(initialCommand)
 
                 if (shouldTransform) {
-                    registerAndRestoreCache(depCacheContext)
+                    registerAndRestoreCache()
 
                     // executing the initial command
                     yield(OverriddenRestorePackagesPathDotnetCommand(initialCommand, _restorePackagesPathArgumentsProvider, overrideRestorePackagesPath))
-
-                    // executing a 'dotnet list package' auxiliary command after the initial one to update invalidation data with actual packages list
-                    // it must be executed after the initial command to ensure that all the packages have been restored by the moment of execution
-                    val projectPackagesObserver = CommandLineOutputAccumulationObserver()
-                    val updateInvalidationDataEnvBuilder = getUpdateInvalidationDataEnvBuilder(depCacheContext, projectPackagesObserver)
-                    yield(ObservingDotnetCommand(_listPackageCommand, projectPackagesObserver, listOf(updateInvalidationDataEnvBuilder), initialCommand.targetArguments))
                 } else {
                     yield(initialCommand)
                 }
@@ -54,18 +43,26 @@ class DotnetDepCacheRestorationCommandTransformer(
         }
     }
 
-    private suspend fun SequenceScope<DotnetCommand>.registerAndRestoreCache(depCacheContext: DotnetDepCacheStepContext) {
+    private suspend fun SequenceScope<DotnetCommand>.registerAndRestoreCache() {
+        val context = _buildStepContextHolder.context
+        if (context == null) {
+            _dotnetDepCacheManager.cache?.logWarning(
+                "Couldn't register and restore cache: Nuget cache step context wasn't initialized"
+            )
+            return
+        }
+
         if (overrideRestorePackagesPath) {
             // since the RestorePackagesPath was overridden by TC, the cache root location is known, so the dependency cache can be registered and restored immediately
             val agentConfiguration = _buildStepContext.runnerContext.build.agentConfiguration
             val restorePackagesPath = _restorePackagesPathManager.getRestorePackagesPathLocation(agentConfiguration)
             _dotnetDepCacheManager.cache?.logMessage("running the build inside a Docker container with enabled package caching: setting the RestorePackagesPath MSBuild property to $restorePackagesPath. " +
                     "The property will be reset to its initial value once the build finishes")
-            _dotnetDepCacheManager.registerAndRestoreCache(depCacheContext, restorePackagesPath)
+            _dotnetDepCacheManager.registerAndRestoreCache(context, restorePackagesPath)
         } else {
             // execute a 'nuget locals' auxiliary command before the initial one to detect the cache root location, then register and restore the dependency cache
             val nugetPackagesGlobalDirObserver = CommandLineOutputAccumulationObserver()
-            val registerCacheEnvBuilder = getRegisterCacheEnvBuilder(depCacheContext, nugetPackagesGlobalDirObserver)
+            val registerCacheEnvBuilder = getRegisterCacheEnvBuilder(context, nugetPackagesGlobalDirObserver)
             yield(ObservingDotnetCommand(_nugetLocalsCommand, nugetPackagesGlobalDirObserver, listOf(registerCacheEnvBuilder)))
         }
     }
@@ -76,7 +73,7 @@ class DotnetDepCacheRestorationCommandTransformer(
                 _virtualContext.isVirtual
 
     private fun getRegisterCacheEnvBuilder(
-        depCacheContext: DotnetDepCacheStepContext,
+        depCacheContext: DotnetDepCacheBuildStepContext,
         nugetPackagesGlobalDirObserver: CommandLineOutputAccumulationObserver
     ) = object : EnvironmentBuilder {
         override fun build(context: DotnetCommandContext): EnvironmentBuildResult {
@@ -84,20 +81,6 @@ class DotnetDepCacheRestorationCommandTransformer(
                 // will be executed after the command
                 disposable = disposableOf {
                     _dotnetDepCacheManager.registerAndRestoreCache(depCacheContext, nugetPackagesGlobalDirObserver)
-                }
-            )
-        }
-    }
-
-    private fun getUpdateInvalidationDataEnvBuilder(
-        depCacheContext: DotnetDepCacheStepContext,
-        projectPackagesObserver: CommandLineOutputAccumulationObserver
-    ) = object : EnvironmentBuilder {
-        override fun build(context: DotnetCommandContext): EnvironmentBuildResult {
-            return EnvironmentBuildResult(
-                // will be executed after the command
-                disposable = disposableOf {
-                    _dotnetDepCacheManager.updateInvalidationData(depCacheContext, projectPackagesObserver)
                 }
             )
         }
@@ -155,10 +138,7 @@ class DotnetDepCacheRestorationCommandTransformer(
     }
 
     companion object {
-        // It is currently limited by the 'list package' command, which we use to obtain the package list.
-        // The --format option is only available starting from version 7.0.200
-        // see https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-list-package
-        val MinDotNetSdkVersionForDepCache = Version(7, 0, 200)
+        val MinDotNetSdkVersionForDepCache = Version(6, 0, 0)
 
         private val UnsupportedCommands = setOf(
             DotnetCommandType.VisualStudio,

@@ -58,6 +58,7 @@
   <bean class="jetbrains.buildServer.agent.runner.WorkflowSessionImpl" scope="prototype">
     <constructor-arg ref="layeredWorkflowComposer"/>
   </bean>
+  <bean class="jetbrains.buildServer.agent.runner.WorkflowSessionEventManager"/>
   <bean class="jetbrains.buildServer.agent.runner.VirtualContextImpl" scope="prototype"/>
   <bean class="jetbrains.buildServer.agent.runner.CacheCleanerSessionImpl"/>
 
@@ -777,10 +778,13 @@
   <bean class="jetbrains.buildServer.nunit.testReordering.NUnitReorderingTestsSplitService"/>
 
   <!--Dependency Cache -->
+  <bean class="jetbrains.buildServer.depcache.DotnetDepCacheWorkflowSessionEventListener"/>
+  <bean class="jetbrains.buildServer.depcache.DotnetDepCacheBuildStepContextHolder"/>
   <bean class="jetbrains.buildServer.depcache.DotnetDepCacheManager"/>
   <bean class="jetbrains.buildServer.depcache.DotnetDepCacheSettingsProvider"/>
   <bean class="jetbrains.buildServer.dotnet.commands.NugetLocalsCommand" id="dotnetNugetLocalsCommand"/>
-  <bean class="jetbrains.buildServer.dotnet.commands.ListPackageCommand" id="dotnetListPackageCommand"/>
+  <bean class="jetbrains.buildServer.depcache.DotnetDepCacheCoroutineScope" id="dotnetDepCacheCoroutineScope"/>
+  <bean class="jetbrains.buildServer.depcache.DotnetDepCacheInvalidationDataCollector"/>
   <bean class="jetbrains.buildServer.dotnet.commands.transformation.DotnetDepCacheRestorationCommandTransformer" id="dotnetDepCacheRestorationCommandTransformer">
     <constructor-arg ref="restorePackagesPathArgumentsProvider"/>
   </bean>

@@ -11,7 +11,6 @@ enum class DotnetCommandType(val id: String) {
     NuGetPush("nuget-push"),
     NuGetDelete("nuget-delete"),
     NuGetLocals("nuget-locals"),
-    ListPackage("list-package"),
     Clean("clean"),
     MSBuild("msbuild"),
     VSTest("vstest"),
