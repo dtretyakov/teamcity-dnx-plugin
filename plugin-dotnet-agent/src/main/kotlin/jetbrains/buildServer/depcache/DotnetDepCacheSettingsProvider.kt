@@ -17,7 +17,8 @@ import jetbrains.buildServer.util.EventDispatcher
 class DotnetDepCacheSettingsProvider(
     private val eventDispatcher: EventDispatcher<AgentLifeCycleListener>,
     private val cacheSettingsProviderRegistry: DependencyCacheSettingsProviderRegistry,
-    private val cacheProvider: DependencyCacheProvider
+    private val cacheProvider: DependencyCacheProvider,
+    private val checksumBuilder: DotnetDepCacheChecksumBuilder
 ) : BuildRunnerDependencyCacheSettingsProvider(
     eventDispatcher, cacheSettingsProviderRegistry, cacheProvider,
     DotnetConstants.RUNNER_TYPE,
@@ -30,7 +31,7 @@ class DotnetDepCacheSettingsProvider(
         private set
 
     protected override fun createPostBuildInvalidators(): List<DotnetDepCachePackagesChangedInvalidator> {
-        postBuildInvalidator = DotnetDepCachePackagesChangedInvalidator()
+        postBuildInvalidator = DotnetDepCachePackagesChangedInvalidator(checksumBuilder)
         return listOf(postBuildInvalidator!!)
     }
 

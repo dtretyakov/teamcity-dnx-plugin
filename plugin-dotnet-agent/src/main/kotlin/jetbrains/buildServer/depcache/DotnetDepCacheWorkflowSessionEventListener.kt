@@ -19,7 +19,7 @@ class DotnetDepCacheWorkflowSessionEventListener(
         val workingDir = _pathsService.getPath(PathType.WorkingDirectory)
         _buildStepContextHolder.initContext()
 
-        _dependencyCacheManager.prepareInvalidationDataAsync(workingDir, _buildStepContextHolder.context!!)
+        _dependencyCacheManager.prepareChecksumAsync(workingDir, _buildStepContextHolder.context!!)
     }
 
     override fun onSessionFinished(status: BuildFinishedStatus) {
@@ -28,11 +28,11 @@ class DotnetDepCacheWorkflowSessionEventListener(
         }
 
         if (_buildStepContextHolder.context == null) {
-            _loggerService.writeWarning("Nuget cache step context wasn't initialized, this executing won't be cached")
+            _loggerService.writeWarning("Nuget cache step context wasn't initialized, this execution won't be cached")
             return
         }
 
-        _dependencyCacheManager.updateInvalidationData(_buildStepContextHolder.context!!)
+        _dependencyCacheManager.updateInvalidatorWithChecksum(_buildStepContextHolder.context!!)
         _buildStepContextHolder.clearContext()
     }
 }

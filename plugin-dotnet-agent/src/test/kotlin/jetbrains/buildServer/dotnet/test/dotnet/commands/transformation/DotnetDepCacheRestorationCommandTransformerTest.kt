@@ -60,7 +60,7 @@ class DotnetDepCacheRestorationCommandTransformerTest {
         every { _dotnetDepCacheManager.cache } returns _dependencyCache
         every { _dotnetDepCacheManager.cacheEnabled } returns true
         every { _restorePackagesPathManager.shouldOverrideRestorePackagesPath() } returns false
-        every { _buildStepContextHolder.context } returns DotnetDepCacheBuildStepContext.newContext(mockk<ParametersService>())
+        every { _buildStepContextHolder.context } returns DotnetDepCacheBuildStepContext(mockk<ParametersService>())
     }
 
     @Test

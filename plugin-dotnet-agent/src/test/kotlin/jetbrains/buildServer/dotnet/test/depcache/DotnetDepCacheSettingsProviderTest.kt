@@ -7,9 +7,10 @@ import jetbrains.buildServer.agent.cache.depcache.DependencyCacheProvider
 import jetbrains.buildServer.agent.cache.depcache.DependencyCacheSettings
 import jetbrains.buildServer.agent.cache.depcache.DependencyCacheSettingsProviderRegistry
 import jetbrains.buildServer.cache.depcache.DependencyCacheConstants.*
-import jetbrains.buildServer.depcache.DotnetDependencyCacheConstants.FEATURE_TOGGLE_DOTNET_DEPENDENCY_CACHE
-import jetbrains.buildServer.depcache.DotnetDepCacheSettingsProvider
+import jetbrains.buildServer.depcache.DotnetDepCacheChecksumBuilder
 import jetbrains.buildServer.depcache.DotnetDepCachePackagesChangedInvalidator
+import jetbrains.buildServer.depcache.DotnetDepCacheSettingsProvider
+import jetbrains.buildServer.depcache.DotnetDependencyCacheConstants.FEATURE_TOGGLE_DOTNET_DEPENDENCY_CACHE
 import jetbrains.buildServer.dotnet.DotnetConstants.RUNNER_TYPE
 import jetbrains.buildServer.util.EventDispatcher
 import org.testng.Assert
@@ -22,6 +23,7 @@ class DotnetDepCacheSettingsProviderTest {
     @MockK private lateinit var eventDispatcherMock: EventDispatcher<AgentLifeCycleListener>
     @MockK private lateinit var cacheSettingsProviderRegistryMock: DependencyCacheSettingsProviderRegistry
     @MockK private lateinit var buildMock: AgentRunningBuild
+    @MockK private lateinit var checksumBuilder: DotnetDepCacheChecksumBuilder
     private lateinit var sharedBuildConfig: MutableMap<String, String?>
     private lateinit var instance: DotnetDepCacheSettingsProvider
 
@@ -36,7 +38,7 @@ class DotnetDepCacheSettingsProviderTest {
         every { buildMock.getSharedConfigParameters() } returns sharedBuildConfig
 
         instance = DotnetDepCacheSettingsProvider(
-            eventDispatcherMock, cacheSettingsProviderRegistryMock, mockk<DependencyCacheProvider>()
+            eventDispatcherMock, cacheSettingsProviderRegistryMock, mockk<DependencyCacheProvider>(), checksumBuilder
         )
     }
 

@@ -2,7 +2,6 @@ package jetbrains.buildServer.depcache
 
 import jetbrains.buildServer.agent.AgentLifeCycleAdapter
 import jetbrains.buildServer.agent.AgentLifeCycleListener
-import jetbrains.buildServer.serverSide.TeamCityProperties
 import jetbrains.buildServer.util.EventDispatcher
 import jetbrains.buildServer.util.executors.ExecutorsFactory
 import kotlinx.coroutines.CoroutineScope
@@ -17,11 +16,9 @@ class DotnetDepCacheCoroutineScope(
     private val scope: CoroutineScope
 
     init {
-        val threadPoolSize = TeamCityProperties.getInteger(DotnetDependencyCacheConstants.THREAD_POOL_SIZE, DotnetDependencyCacheConstants.THREAD_POOL_SIZE_DEFAULT)
-
         scope = CoroutineScope(
             ExecutorsFactory
-                .newFixedDaemonExecutor(EXECUTOR_NAME, threadPoolSize)
+                .newFixedDaemonExecutor(EXECUTOR_NAME, THREAD_POOL_SIZE)
                 .asCoroutineDispatcher(),
         )
 
@@ -37,5 +34,6 @@ class DotnetDepCacheCoroutineScope(
 
     private companion object {
         const val EXECUTOR_NAME = "Nuget Caches"
+        const val THREAD_POOL_SIZE = 1
     }
 }

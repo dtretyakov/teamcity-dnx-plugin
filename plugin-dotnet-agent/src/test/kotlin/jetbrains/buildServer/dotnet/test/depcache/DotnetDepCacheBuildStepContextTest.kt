@@ -13,7 +13,7 @@ class DotnetDepCacheBuildStepContextTest {
     fun `should increment execution number` () {
         // arrange
         val parametersService = mockk<ParametersService>()
-        val context = DotnetDepCacheBuildStepContext.newContext(parametersService)
+        val context = DotnetDepCacheBuildStepContext(parametersService)
         var commandsCounter = 0
 
         // act

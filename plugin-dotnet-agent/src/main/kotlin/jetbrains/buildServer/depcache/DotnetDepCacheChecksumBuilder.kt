@@ -7,36 +7,46 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.regex.Pattern
 
-class DotnetDepCacheInvalidationDataCollector {
+class DotnetDepCacheChecksumBuilder {
 
-    fun collect(workDir: File, cache: DependencyCache, depthLimit: Int): Result<Map<String, String>> {
+    fun merge(first: String, second: String): String {
+        val messageDigest = MessageDigest.getInstance("SHA-256")
+
+        val combined = (first + second).toByteArray()
+
+        return messageDigest.digest(combined).toHex()
+    }
+
+    fun build(workDir: File, cache: DependencyCache, depthLimit: Int): Result<String> {
         return runCatching {
             val files = ArrayList<String>()
             FileUtil.listFilesRecursively(workDir, File.separator, false, depthLimit, FILE_FILTER, files)
-            val checksums = buildChecksums(files, workDir, cache)
+            val checksum = buildByFiles(files, workDir, cache)
 
-            return Result.success(checksums)
+            return Result.success(checksum)
         }
     }
 
-    private fun buildChecksums(files: List<String>, workDir: File, cache: DependencyCache): Map<String, String> {
-        val result = HashMap<String, String>()
-        val messageDigest = MessageDigest.getInstance("SHA-256")
+    private fun buildByFiles(files: List<String>, workDir: File, cache: DependencyCache): String {
+        cache.logMessage("building a checksum: filesCount=${files.size}, workingDirectory=${workDir}")
 
-        for (filePath in files) {
+        val messageDigest = MessageDigest.getInstance("SHA-256")
+        val sortedFiles = files.sorted() // making hashing consistent
+
+        for (filePath in sortedFiles) {
             val targetFile = File(workDir, filePath)
             if (!targetFile.exists() || !targetFile.isFile) {
                 cache.logWarning("File not found or is not a valid file: $targetFile")
                 continue
             }
 
-            val content = targetFile.readBytes()
-            val digest = messageDigest.digest(content)
-
-            result[filePath.replace(File.separatorChar, '/')] = digest.toHex()
+            val content = targetFile.readText()
+                .replace("\r\n", "\n") // CRLF --> LF to make checksums platform independent
+                .toByteArray()
+            messageDigest.update(content)
         }
 
-        return result
+        return messageDigest.digest().toHex()
     }
 
     private fun ByteArray.toHex(): String {

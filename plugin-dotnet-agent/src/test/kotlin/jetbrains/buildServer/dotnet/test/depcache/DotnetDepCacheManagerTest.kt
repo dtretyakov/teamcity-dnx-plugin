@@ -36,16 +36,13 @@ class DotnetDepCacheManagerTest {
     @MockK
     private lateinit var _invalidator: DotnetDepCachePackagesChangedInvalidator
     @MockK
-    private lateinit var _invalidationDataCollector: DotnetDepCacheInvalidationDataCollector
+    private lateinit var _checksumBuilder: DotnetDepCacheChecksumBuilder
 
     private lateinit var tempFiles: TempFiles
     private lateinit var workDir: File
     private lateinit var cachesDir: File
     private lateinit var stepId: String
-    private val invalidationData: Map<String, String> = mapOf(
-        "/Project1.csproj" to "932710cf8b4e31b5dd242a72540fe51c2fb9510fedbeaf7866780843d39af699",
-        "/Project2.csproj" to "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
-    )
+    private val invalidationData: String = "ae990de7ec4fa1af7ce5fc014f55623c34e15857baddf63b2dabc43fc9c5dec3"
     private lateinit var coroutineScope: CoroutineScope
     private val testDispatcher = StandardTestDispatcher()
 
@@ -63,7 +60,7 @@ class DotnetDepCacheManagerTest {
         every { _dotnetDepCacheSettingsProvider.cache } returns _cache
         every { _dotnetDepCacheSettingsProvider.postBuildInvalidator } returns _invalidator
         every { _buildInfo.id } returns stepId
-        every { _invalidationDataCollector.collect(workDir, _cache, any()) } returns Result.success(invalidationData)
+        every { _checksumBuilder.build(workDir, _cache, any()) } returns Result.success(invalidationData)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -127,22 +124,22 @@ class DotnetDepCacheManagerTest {
     fun `should update invalidation data`() {
         // arrange
         val context = mockk<DotnetDepCacheBuildStepContext>(relaxed = true)
-        val deferredData = mockk<Deferred<Map<String, String>>>()
+        val deferredData = mockk<Deferred<String>>()
         coEvery { deferredData.await() } returns invalidationData
-        every { context.invalidationData } returns deferredData
-        every { context.invalidationDataAwaitTimeout } returns 10000
+        every { context.projectFilesChecksum } returns deferredData
+        every { context.projectFilesChecksumAwaitTimeout } returns 10000
         every { context.cachesLocations } returns mutableSetOf(cachesDir.toPath())
         val cachesLocationsSlot = slot<Set<Path>>()
-        val invalidationDataSlot = slot<Map<String, String>>()
+        val checksumSlot = slot<String>()
         val manager = create()
 
         // act
-        manager.updateInvalidationData(context)
+        manager.updateInvalidatorWithChecksum(context)
 
         // assert
-        verify(exactly = 1) { _invalidator.addChecksumsToCachesLocations(capture(cachesLocationsSlot), capture(invalidationDataSlot)) }
+        verify(exactly = 1) { _invalidator.addChecksumToCachesLocations(capture(cachesLocationsSlot), capture(checksumSlot)) }
         Assert.assertEquals(cachesLocationsSlot.captured, mutableSetOf(cachesDir.toPath()))
-        Assert.assertEquals(invalidationDataSlot.captured, invalidationData)
+        Assert.assertEquals(checksumSlot.captured, invalidationData)
     }
 
     @Test
@@ -153,29 +150,29 @@ class DotnetDepCacheManagerTest {
         val manager = create()
 
         // act
-        manager.updateInvalidationData(context)
+        manager.updateInvalidatorWithChecksum(context)
 
         // assert
-        verify(exactly = 0) { _invalidator.addChecksumsToCachesLocations(any(), any()) }
+        verify(exactly = 0) { _invalidator.addChecksumToCachesLocations(any(), any()) }
     }
 
     @Test
     fun `should prepare invalidation data`() {
         // arrange
         val context = mockk<DotnetDepCacheBuildStepContext>(relaxed = true)
-        coEvery { _invalidationDataCollector.collect(workDir, _cache, any()) } returns Result.success(invalidationData)
+        coEvery { _checksumBuilder.build(workDir, _cache, any()) } returns Result.success(invalidationData)
         val manager = create()
 
         // act
-        manager.prepareInvalidationDataAsync(workDir, context)
+        manager.prepareChecksumAsync(workDir, context)
 
         // assert
-        verify(exactly = 1) { context.invalidationData = any() }
+        verify(exactly = 1) { context.projectFilesChecksum = any() }
     }
 
     private fun create() = DotnetDepCacheManager(
         _loggerService, _dotnetDepCacheSettingsProvider,
-        _buildInfo, coroutineScope, _invalidationDataCollector
+        _buildInfo, coroutineScope, _checksumBuilder
     )
 
     private fun cacheRootUsage() = CacheRootUsage(

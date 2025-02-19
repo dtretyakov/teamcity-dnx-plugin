@@ -784,7 +784,7 @@
   <bean class="jetbrains.buildServer.depcache.DotnetDepCacheSettingsProvider"/>
   <bean class="jetbrains.buildServer.dotnet.commands.NugetLocalsCommand" id="dotnetNugetLocalsCommand"/>
   <bean class="jetbrains.buildServer.depcache.DotnetDepCacheCoroutineScope" id="dotnetDepCacheCoroutineScope"/>
-  <bean class="jetbrains.buildServer.depcache.DotnetDepCacheInvalidationDataCollector"/>
+  <bean class="jetbrains.buildServer.depcache.DotnetDepCacheChecksumBuilder"/>
   <bean class="jetbrains.buildServer.dotnet.commands.transformation.DotnetDepCacheRestorationCommandTransformer" id="dotnetDepCacheRestorationCommandTransformer">
     <constructor-arg ref="restorePackagesPathArgumentsProvider"/>
   </bean>

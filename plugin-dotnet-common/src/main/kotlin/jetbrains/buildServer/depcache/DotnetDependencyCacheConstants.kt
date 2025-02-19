@@ -8,10 +8,8 @@ object DotnetDependencyCacheConstants {
 
     const val CACHE_ORIGINAL_ARCHIVE: String = "teamcity.internal.depcache.dotnet.cacheOriginalArchive"
     const val CACHE_ORIGINAL_ARCHIVE_DEFAULT: Boolean = false
-    const val INVALIDATION_DATA_SEARCH_DEPTH_LIMIT: String = "teamcity.internal.depcache.dotnet.invalidationDataSearchDepthLimit"
-    const val INVALIDATION_DATA_SEARCH_DEPTH_LIMIT_DEFAULT: Int = Integer.MAX_VALUE
-    const val INVALIDATION_DATA_AWAITING_TIMEOUT_MS: String = "teamcity.internal.depcache.dotnet.invalidationDataAwaitingTimeoutMs"
-    const val INVALIDATION_DATA_AWAITING_TIMEOUT_DEFAULT_MS: Long = 60000
-    const val THREAD_POOL_SIZE: String = "teamcity.internal.depcache.dotnet.threadPoolSize"
-    const val THREAD_POOL_SIZE_DEFAULT: Int = 1
+    const val PROJECT_FILES_CHECKSUM_SEARCH_DEPTH_LIMIT: String = "teamcity.internal.depcache.dotnet.projectFilesChecksumSearchDepthLimit"
+    const val PROJECT_FILES_CHECKSUM_SEARCH_DEPTH_LIMIT_DEFAULT: Int = Integer.MAX_VALUE
+    const val PROJECT_FILES_CHECKSUM_AWAITING_TIMEOUT_MS: String = "teamcity.internal.depcache.dotnet.projectFilesChecksumAwaitingTimeoutMs"
+    const val PROJECT_FILES_CHECKSUM_AWAITING_TIMEOUT_DEFAULT_MS: Long = 60000
 }

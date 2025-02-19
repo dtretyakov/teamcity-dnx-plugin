@@ -13,7 +13,7 @@ class DotnetDepCacheManager(
     private val _dotnetDepCacheSettingsProvider: DotnetDepCacheSettingsProvider,
     private val _buildInfo: BuildInfo,
     private val _coroutineScope: CoroutineScope,
-    private val _invalidationDataCollector: DotnetDepCacheInvalidationDataCollector
+    private val _checksumBuilder: DotnetDepCacheChecksumBuilder
 ) {
 
     val cache: DependencyCache?
@@ -22,28 +22,28 @@ class DotnetDepCacheManager(
     val cacheEnabled: Boolean
         get() = cache != null // not null when cache is enabled and configured for dotnet runner
 
-    fun prepareInvalidationDataAsync(workingDirectory: File, depCacheStepContext: DotnetDepCacheBuildStepContext) {
+    fun prepareChecksumAsync(workingDirectory: File, depCacheStepContext: DotnetDepCacheBuildStepContext) {
         val cache = cache
         val invalidator = _dotnetDepCacheSettingsProvider.postBuildInvalidator
         if (cache == null || invalidator == null) {
             // this is not an expected case, something is wrong
-            _loggerService.writeWarning(".NET dependency cache is enabled but failed to initialize, couldn't prepare invalidation data")
+            _loggerService.writeWarning(".NET dependency cache is enabled but failed to initialize, couldn't prepare a checksum")
             return
         }
 
-        val deferred: Deferred<Map<String, String>> = _coroutineScope.async {
+        val deferred: Deferred<String> = _coroutineScope.async {
             withContext(Dispatchers.IO) {
-                _invalidationDataCollector.collect(workingDirectory, cache, depCacheStepContext.depthLimit).fold(
+                _checksumBuilder.build(workingDirectory, cache, depCacheStepContext.depthLimit).fold(
                     onSuccess = { it },
                     onFailure = { exception ->
-                        cache.logWarning("Error while preparing invalidation data, this execution will not be cached: ${exception.message}")
-                        return@fold emptyMap()
+                        cache.logWarning("Error while preparing a checksum, this execution will not be cached: ${exception.message}")
+                        return@fold ""
                     }
                 )
             }
         }
 
-        depCacheStepContext.invalidationData = deferred
+        depCacheStepContext.projectFilesChecksum = deferred
     }
 
     fun registerAndRestoreCache(
@@ -96,9 +96,7 @@ class DotnetDepCacheManager(
         depCacheContext.cachesLocations.add(nugetPackagesPath)
     }
 
-    fun updateInvalidationData(
-        depCacheStepContext: DotnetDepCacheBuildStepContext
-    ) {
+    fun updateInvalidatorWithChecksum(depCacheStepContext: DotnetDepCacheBuildStepContext) {
         val cache = cache
         val invalidator = _dotnetDepCacheSettingsProvider.postBuildInvalidator
         if (cache == null || invalidator == null) {
@@ -107,8 +105,8 @@ class DotnetDepCacheManager(
             return
         }
 
-        if (depCacheStepContext.invalidationData == null) {
-            cache.logWarning("invalidation data hasn't been prepared, this execution will not be cached")
+        if (depCacheStepContext.projectFilesChecksum == null) {
+            cache.logWarning("Checksum hasn't been built, this execution will not be cached")
             return
         }
 
@@ -117,22 +115,22 @@ class DotnetDepCacheManager(
             return
         }
 
-        val invalidationData: Map<String, String> = runCatching {
+        val projectFilesChecksum: String = runCatching {
             runBlocking {
-                withTimeout(depCacheStepContext.invalidationDataAwaitTimeout) {
-                    depCacheStepContext.invalidationData!!.await()
+                withTimeout(depCacheStepContext.projectFilesChecksumAwaitTimeout) {
+                    depCacheStepContext.projectFilesChecksum!!.await()
                 }
             }
         }.getOrElse { e ->
-            cache.logWarning("an error occurred during getting the invalidation data: ${e.message}")
-            emptyMap()
+            cache.logWarning("an error occurred during getting the project files checksum: ${e.message}")
+            ""
         }
 
-        if (invalidationData.isEmpty()) {
-            cache.logWarning("invalidation data wasn't collected, this execution will not be cached")
+        if (projectFilesChecksum.isEmpty()) {
+            cache.logWarning("checksum wasn't built, this execution will not be cached")
             return
         }
 
-        invalidator.addChecksumsToCachesLocations(depCacheStepContext.cachesLocations, invalidationData)
+        invalidator.addChecksumToCachesLocations(depCacheStepContext.cachesLocations, projectFilesChecksum)
     }
 }
